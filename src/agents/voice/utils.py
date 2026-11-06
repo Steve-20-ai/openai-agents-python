@@ -1,6 +1,33 @@
 import re
 from collections.abc import Callable
 
+# Latin sentences end in .!? and are separated by whitespace, so the
+# whitespace has to be part of the boundary.
+_LATIN_TERMINATORS = ".!?"
+# Chinese and Japanese end a sentence in 。！？ and write no space after it, so
+# requiring whitespace meant a CJK reply never split at all and TTS only
+# started once the whole answer had been generated.
+_CJK_TERMINATORS = "。！？"
+# Closing quotes and brackets belong to the sentence that just ended. A
+# boundary placed in front of one would start the next chunk with 」 or ”.
+_CLOSING_MARKS = "」』）］】》〉”’"
+
+_SENTENCE_BOUNDARY_RE = re.compile(
+    rf"(?<=[{re.escape(_LATIN_TERMINATORS)}])\s+"
+    rf"|(?<=[{re.escape(_CJK_TERMINATORS)}])(?![{re.escape(_CLOSING_MARKS)}])"
+)
+
+
+def _needs_separator(sentence: str) -> bool:
+    """Whether a space has to follow ``sentence`` when chunks are rejoined.
+
+    A Latin boundary consumes the whitespace it split on, so it has to be put
+    back. A CJK boundary is zero-width and there was no separator to begin
+    with; inserting one would put a space the model never wrote in front of
+    the next Chinese or Japanese sentence.
+    """
+    return sentence.rstrip(_CLOSING_MARKS)[-1:] not in _CJK_TERMINATORS
+
 
 def get_sentence_based_splitter(
     min_sentence_length: int = 20,
@@ -26,9 +53,14 @@ def get_sentence_based_splitter(
         Returns:
             A tuple of the text to process and the remaining text buffer.
         """
-        sentences = re.split(r"(?<=[.!?])\s+", text_buffer.strip())
+        sentences = _SENTENCE_BOUNDARY_RE.split(text_buffer.strip())
         if len(sentences) >= 1:
-            combined_sentences = " ".join(sentences[:-1])
+            parts = sentences[:-1]
+            combined_sentences = ""
+            for index, sentence in enumerate(parts):
+                if index and _needs_separator(parts[index - 1]):
+                    combined_sentences += " "
+                combined_sentences += sentence
             if len(combined_sentences) >= min_sentence_length:
                 # Carry any trailing whitespace over to the remainder. It separates the text
                 # held back from the next streamed delta, and stripping it concatenates the

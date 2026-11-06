@@ -69,3 +69,71 @@ def test_split_without_trailing_whitespace_is_unchanged() -> None:
         "This sentence is long enough to flush.",
         "He",
     )
+
+
+CJK_TEXTS = [
+    "今天天气很好，阳光明媚。明天会下雨，记得带伞。我们",
+    "今日はとても良い天気です。明日は雨が降るでしょう。傘を",
+]
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3])
+@pytest.mark.parametrize("text", CJK_TEXTS, ids=["zh", "ja"])
+def test_streamed_cjk_text_keeps_every_character(text: str, chunk_size: int) -> None:
+    """A CJK reply must stream in sentences, and lose nothing doing it.
+
+    中文 and 日本語 end a sentence in 。！？ with no space after it, so the
+    whitespace the Latin pattern required never appeared and nothing was ever
+    flushed: TTS received the whole reply only once generation had finished.
+    """
+    spoken = _stream(text, chunk_size)
+
+    assert len(spoken) > 1, "nothing was flushed before the reply finished"
+    assert "".join(spoken) == text
+
+
+def test_split_flushes_a_cjk_sentence_without_a_space() -> None:
+    split = get_sentence_based_splitter(20)
+
+    spoken, remaining = split("今天天气很好，阳光明媚。明天会下雨，记得带伞。我们")
+
+    assert spoken == "今天天气很好，阳光明媚。明天会下雨，记得带伞。"
+    assert remaining == "我们"
+    # No separator was consumed, so none may be inserted.
+    assert " " not in spoken
+
+
+def test_split_recognises_cjk_exclamations_and_questions() -> None:
+    split = get_sentence_based_splitter(0)
+
+    assert split("太棒了！真的吗？我们明天继续吧。好的") == (
+        "太棒了！真的吗？我们明天继续吧。",
+        "好的",
+    )
+
+
+def test_split_keeps_a_closing_bracket_with_its_sentence() -> None:
+    """A boundary right after 。 would start the next chunk with 」."""
+    split = get_sentence_based_splitter(0)
+
+    spoken, remaining = split("「行く。」と言った。次に進む。まだ")
+
+    assert spoken == "「行く。」と言った。次に進む。"
+    assert remaining == "まだ"
+    assert not remaining.startswith("」")
+
+
+def test_split_mixes_latin_and_cjk_separators() -> None:
+    split = get_sentence_based_splitter(0)
+
+    spoken, remaining = split("Hello there. 你好世界。Next part")
+
+    # The space consumed by the Latin boundary is restored; the CJK boundary
+    # never had one.
+    assert spoken == "Hello there. 你好世界。"
+    assert remaining == "Next part"
+
+
+def test_split_respects_min_sentence_length_for_cjk() -> None:
+    assert get_sentence_based_splitter(20)("好的。嗯。我们继续") == ("", "好的。嗯。我们继续")
+    assert get_sentence_based_splitter(3)("好的。嗯。我们继续") == ("好的。嗯。", "我们继续")
