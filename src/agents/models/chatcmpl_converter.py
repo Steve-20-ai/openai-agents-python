@@ -291,7 +291,12 @@ class Converter:
         keys = set(item)
         if not {"content", "role"} <= keys:
             return None
-        if not keys <= {"content", "role", "type", "phase"}:
+        # `name` is the speaker name that the Chat Completions message types
+        # accept, and the one this SDK's own history summarizer writes into a
+        # transcript line (`role (name): content`) and parses back out.
+        if not keys <= {"content", "role", "type", "phase", "name"}:
+            return None
+        if "name" in item and not isinstance(item["name"], str):
             return None
         if "type" in item and item["type"] != "message":
             return None
@@ -691,6 +696,10 @@ class Converter:
             if easy_msg := cls.maybe_easy_input_message(item):
                 role = easy_msg["role"]
                 content = easy_msg["content"]
+                # read from the item, not from `easy_msg`: EasyInputMessageParam
+                # does not declare `name`, but every ChatCompletion message
+                # param this branch builds does.
+                name = item.get("name") if isinstance(item, dict) else None
 
                 if role == "user":
                     flush_assistant_message()
@@ -698,6 +707,8 @@ class Converter:
                         "role": "user",
                         "content": cls.extract_all_content(content),
                     }
+                    if name is not None:
+                        msg_user["name"] = name
                     result.append(msg_user)
                 elif role == "system":
                     flush_assistant_message()
@@ -705,6 +716,8 @@ class Converter:
                         "role": "system",
                         "content": cls.extract_text_content(content),
                     }
+                    if name is not None:
+                        msg_system["name"] = name
                     result.append(msg_system)
                 elif role == "developer":
                     flush_assistant_message()
@@ -712,6 +725,8 @@ class Converter:
                         "role": "developer",
                         "content": cls.extract_text_content(content),
                     }
+                    if name is not None:
+                        msg_developer["name"] = name
                     result.append(msg_developer)
                 elif role == "assistant":
                     flush_assistant_message()
@@ -719,6 +734,8 @@ class Converter:
                         "role": "assistant",
                         "content": cls.extract_text_content(content),
                     }
+                    if name is not None:
+                        msg_assistant["name"] = name
                     result.append(msg_assistant)
                 else:
                     raise UserError(f"Unexpected role in easy_input_message: {role}")

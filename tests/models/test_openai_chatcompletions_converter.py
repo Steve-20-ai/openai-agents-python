@@ -48,6 +48,7 @@ from openai.types.responses.response_input_item_param import FunctionCallOutput
 
 from agents.agent_output import AgentOutputSchema
 from agents.exceptions import AgentsException, UserError
+from agents.handoffs.history import _parse_summary_line
 from agents.items import TResponseInputItem
 from agents.models.chatcmpl_converter import Converter
 from agents.models.fake_id import FAKE_RESPONSES_ID
@@ -245,6 +246,55 @@ def test_items_to_messages_with_easy_input_message():
     assert out["role"] == "user"
     # For simple string inputs, the converter returns the content as a bare string
     assert out["content"] == "How are you?"
+
+
+def test_items_to_messages_keeps_the_speaker_name_of_an_easy_input_message():
+    """
+    The history summarizer writes `role (name): content` lines and parses them
+    back into items that carry a `name`. The Chat Completions message types
+    accept that field, so forwarding such a transcript must not fail.
+    """
+    items = [
+        cast(TResponseInputItem, {"role": "user", "name": "Dana", "content": "Hi"}),
+        cast(TResponseInputItem, {"role": "assistant", "name": "Robin", "content": "Hello"}),
+    ]
+    messages = Converter.items_to_messages(items)
+
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "Hi"
+    assert messages[0]["name"] == "Dana"
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"] == "Hello"
+    assert messages[1]["name"] == "Robin"
+
+
+def test_items_to_messages_does_not_add_a_name_key_that_was_not_there():
+    messages = Converter.items_to_messages([{"role": "user", "content": "Hi"}])
+
+    assert "name" not in messages[0]
+
+
+def test_items_to_messages_rejects_a_non_string_name():
+    item = cast(TResponseInputItem, {"role": "user", "name": 7, "content": "Hi"})
+
+    with pytest.raises(UserError, match="Unhandled item type or structure"):
+        Converter.items_to_messages([item])
+
+
+def test_items_to_messages_accepts_a_parsed_history_summary_line():
+    """
+    The reported failure, end to end: a transcript line with a speaker name is
+    parsed back into an item and then converted for a Chat Completions model.
+    """
+    parsed = _parse_summary_line("user (Dana): Hi, I need my subscription history.")
+    assert parsed is not None
+
+    messages = Converter.items_to_messages([cast(TResponseInputItem, parsed)])
+
+    assert messages[0]["role"] == "user"
+    assert messages[0]["name"] == "Dana"
+    assert messages[0]["content"] == "Hi, I need my subscription history."
 
 
 @pytest.mark.parametrize(
